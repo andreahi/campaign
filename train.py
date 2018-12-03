@@ -1,65 +1,57 @@
+import os
+
 import tensorflow as tf
 import pandas as pd
 import numpy as np
+from sklearn import preprocessing
 from sklearn.preprocessing import Normalizer
-from tensorflow.python.keras.layers import LeakyReLU
-product_dim = 184
-new_product_dim = 89
+
+from FileUtils import save_obj
+from model import get_model
+from test_model import test_model
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 g = tf.Graph()
 with g.as_default():
 
-    birth_date = tf.placeholder(tf.float32, [None], name="birth_date")
-    history = tf.placeholder(tf.float32, [None, product_dim], name="history")
-    current_products = tf.placeholder(tf.float32, [None, product_dim], name="current_products")
-    new_product = tf.placeholder(tf.float32, [None, new_product_dim], name="new_product")
-
-    from tensorflow.contrib import slim
-
-    hidden = tf.concat([
-        slim.fully_connected(tf.expand_dims(birth_date, axis=1), 10, activation_fn=LeakyReLU(), weights_initializer=tf.truncated_normal_initializer(mean=0.0, stddev=.1)),
-        slim.fully_connected(history, 100, activation_fn=LeakyReLU(), weights_initializer=tf.truncated_normal_initializer(mean=0.0, stddev=.1)),
-        slim.fully_connected(current_products, 100, activation_fn=LeakyReLU(), weights_initializer=tf.truncated_normal_initializer(mean=0.0, stddev=.1))]
-        , axis=1)
-
-    hidden = slim.fully_connected(hidden, 100, activation_fn=LeakyReLU(),weights_initializer=tf.contrib.layers.variance_scaling_initializer())
-    hidden = slim.fully_connected(hidden, 100, activation_fn=LeakyReLU(),weights_initializer=tf.contrib.layers.variance_scaling_initializer())
-    hidden = slim.fully_connected(hidden, 100, activation_fn=LeakyReLU(),weights_initializer=tf.contrib.layers.variance_scaling_initializer())
-    hidden = slim.fully_connected(hidden, 100, activation_fn=LeakyReLU(),weights_initializer=tf.contrib.layers.variance_scaling_initializer())
-
-    out = slim.fully_connected(hidden, new_product_dim, activation_fn=LeakyReLU(),weights_initializer=tf.contrib.layers.variance_scaling_initializer())
-    out = tf.nn.softmax(out)
-    #out = tf.Print(out, [out, tf.shape(out)], "out: ", summarize=100)
-    loss = tf.losses.softmax_cross_entropy(new_product, out)
-
-    optimizer = tf.train.AdamOptimizer(learning_rate=.001).minimize(loss)
-
+    birth_date, history, current_products, consumer_product, business_product, new_product, loss, optimizer, out, training = get_model()
     sess = tf.Session()
     init = tf.global_variables_initializer()
     sess.run(init)
     saver = tf.train.Saver()
 
-    df = pd.read_json("filename_formated.txt")
+    df = pd.read_json("train.txt")
+    df_test = pd.read_json("test.txt")
     print("Amount of traning data: ", len(df))
 
     axis_sum = np.sum(np.array(list(np.array(df.newProducts))), axis=1)
-    if max(axis_sum) != 1 or min(axis_sum) != 1 :
+    if max(axis_sum) > 10 or min(axis_sum) != 1 :
         print("ERROR: wrong dim sum")
         exit(12)
 
-    birth_dates = np.array(list(np.array(df.birthDate)))
-    birth_data_normalizer = Normalizer().fit(birth_dates.reshape(-1, 1))
-    birth_dates = np.squeeze(birth_data_normalizer.transform(birth_dates.reshape(-1, 1)))
+    birth_dates = np.array(list(np.array(df.birthDate, dtype=float))).reshape(-1, 1)
+    min_max_scaler = preprocessing.MinMaxScaler()
+    birth_dates = min_max_scaler.fit_transform(birth_dates)
+    birth_dates = np.squeeze(birth_dates)
+    # birth_data_normalizer = Normalizer().fit(birth_dates)
+    # birth_dates = np.squeeze(birth_data_normalizer.transform(birth_dates))
 
-    saver.restore(sess, "./checkpoint.ckpt")
+    save_obj(min_max_scaler, "min_max_scaler")
+    #saver.restore(sess, "./checkpoint.ckpt")
+    print("Training samples: ", len(df.newProducts))
 
-
-    for i in range(100000):
+    for i in range(1000000):
         _, train_loss = sess.run([optimizer, loss], feed_dict={
             birth_date: birth_dates,
             history: np.array(list(np.array(df.history))),
             current_products: np.array(list(np.array(df.currentProducts))),
-            new_product: np.array(list(np.array(df.newProducts)))})
-        if i % 1000 == 0:
+            new_product: np.array(list(np.array(df.newProducts))),
+            consumer_product: np.array(list(np.array(df.ConsumerType)), dtype=float),
+            business_product: np.array(list(np.array(df.BusinessType)), dtype=float),
+            training: True
+        })
+        if i % 100 == 0:
             print("train_loss: ", train_loss)
+            print("train accuracy: ", test_model(sess, df, birth_date, history, current_products, consumer_product, business_product, new_product, loss, optimizer, out, training))
+            print("test accuracy: ", test_model(sess, df_test, birth_date, history, current_products, consumer_product, business_product, new_product, loss, optimizer, out, training))
             saver.save(sess, "./checkpoint.ckpt")

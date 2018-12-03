@@ -1,3 +1,5 @@
 pandas
 tensorflow
 sklearn
+flask-restful
+flask-jsonpify
